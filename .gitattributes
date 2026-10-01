@@ -1,0 +1,7 @@
+# Keep repository text files consistent across Windows, macOS, and Linux.
+* text=auto eol=lf
+
+# Distribution and archive artifacts are binary when intentionally committed.
+*.whl binary
+*.zip binary
+*.tar.gz binary
