@@ -23,7 +23,10 @@ def test_missing_jwt_signing_key_is_a_system_check_error() -> None:
 
 def test_django_registers_the_package_checks() -> None:
     with override_settings(
-        FREEHAND_KIT_AUTH={"JWT": {"SIGNING_KEY": "test-only-signing-key-at-least-32-bytes"}}
+        FREEHAND_KIT_AUTH={
+            "JWT": {"SIGNING_KEY": "test-only-signing-key-at-least-32-bytes"},
+            "THROTTLE": {"REQUIRE_SHARED_CACHE": False},
+        }
     ):
         issues = checks.run_checks(tags=["fk_auth"])
 
@@ -77,3 +80,25 @@ def test_short_hmac_signing_key_is_a_system_check_error() -> None:
         issues = configuration_issues()
 
     assert any(issue.id == "fk_auth.E035" for issue in issues)
+
+
+def test_shared_cache_is_required_by_the_production_default() -> None:
+    with override_settings(
+        FREEHAND_KIT_AUTH={"JWT": {"SIGNING_KEY": "test-only-signing-key-at-least-32-bytes"}}
+    ):
+        issues = configuration_issues()
+
+    assert any(issue.id == "fk_auth.E049" for issue in issues)
+
+
+def test_roles_require_a_valid_server_owned_default() -> None:
+    with override_settings(
+        FREEHAND_KIT_AUTH={
+            "JWT": {"SIGNING_KEY": "test-only-signing-key-at-least-32-bytes"},
+            "THROTTLE": {"REQUIRE_SHARED_CACHE": False},
+            "ROLES": {"ENABLED": True, "DEFAULT_SIGNUP_ROLE": "missing", "DEFINITIONS": {}},
+        }
+    ):
+        issues = configuration_issues()
+
+    assert any(issue.id == "fk_auth.E053" for issue in issues)

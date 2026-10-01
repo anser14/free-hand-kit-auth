@@ -10,8 +10,10 @@ from typing import Any
 from django.apps import apps
 from django.conf import settings as django_settings
 from django.contrib.auth import get_user_model
-from django.core.checks import Error, Warning
+from django.core.cache import caches
+from django.core.checks import Error
 from django.core.exceptions import FieldDoesNotExist
+from django.utils.module_loading import import_string
 
 SETTING_NAME = "FREEHAND_KIT_AUTH"
 SUPPORTED_LOGIN_IDENTIFIERS = frozenset({"email", "username"})
@@ -24,6 +26,7 @@ SUPPORTED_OTP_ALPHABETS = frozenset({"digits", "alphanumeric"})
 DEFAULTS: dict[str, Any] = {
     "USER": {
         "EMAIL_FIELD": "email",
+        "REQUIRE_UNIQUE_EMAIL": True,
         "REGISTRATION_FIELDS": (),
         "PROFILE_READ_FIELDS": (),
         "PROFILE_WRITE_FIELDS": (),
@@ -38,6 +41,11 @@ DEFAULTS: dict[str, Any] = {
         "VERIFICATION_TOKEN_LIFETIME_SECONDS": 3600,
         "VERIFICATION_URL_TEMPLATE": None,
         "PASSWORD_RESET_URL_TEMPLATE": None,
+        "DELIVERY_DISPATCHER": None,
+        "OUTBOX_MAX_ATTEMPTS": 5,
+        "OUTBOX_RETRY_BASE_SECONDS": 60,
+        "OUTBOX_STALE_SENDING_SECONDS": 900,
+        "OUTBOX_RETENTION_DAYS": 90,
     },
     "VERIFICATION": {
         # None preserves the v0.1 legacy behavior: use link mode when a URL
@@ -73,12 +81,17 @@ DEFAULTS: dict[str, Any] = {
         "DEFINITIONS": {},
     },
     "THROTTLE": {
+        "CACHE_ALIAS": "default",
+        "REQUIRE_SHARED_CACHE": True,
         "SIGNUP": "5/hour",
         "LOGIN": "10/min",
+        "LOGIN_IDENTIFIER": "5/min",
         "EMAIL": "5/hour",
+        "EMAIL_ADDRESS": "3/hour",
         "PASSWORD_RESET": "5/hour",
         "TOKEN": "20/min",
     },
+    "CREDENTIAL_RETENTION_DAYS": 30,
 }
 
 SENSITIVE_USER_FIELDS = frozenset(
@@ -123,8 +136,8 @@ def get_settings() -> dict[str, Any]:
 def get_verification_method(config: Mapping[str, Any] | None = None) -> str:
     """Return the selected verification delivery/credential contract.
 
-    A missing explicit method retains the first pre-alpha contract so upgrading a
-    host does not unexpectedly change an existing link or token workflow.
+    A missing explicit method retains the pre-1.0 contract so upgrading a host does
+    not unexpectedly change an existing link or token workflow.
     """
 
     resolved = config if config is not None else get_settings()
@@ -204,6 +217,7 @@ def _validate_user_model_contract(config: Mapping[str, Any]) -> list[Error]:
 
     issues: list[Error] = []
     email_field = get_user_model_email_field()
+    require_unique_email = user_config.get("REQUIRE_UNIQUE_EMAIL")
     registration = get_registration_fields()
     profile_read = tuple(user_config["PROFILE_READ_FIELDS"])
     profile_write = tuple(user_config["PROFILE_WRITE_FIELDS"])
@@ -222,6 +236,14 @@ def _validate_user_model_contract(config: Mapping[str, Any]) -> list[Error]:
             Error(
                 "Email verification requires FREEHAND_KIT_AUTH['USER']['EMAIL_FIELD'].",
                 id="fk_auth.E011",
+            )
+        )
+
+    if not isinstance(require_unique_email, bool):
+        issues.append(
+            Error(
+                "USER.REQUIRE_UNIQUE_EMAIL must be a boolean.",
+                id="fk_auth.E036",
             )
         )
 
@@ -289,9 +311,9 @@ def _validate_user_model_contract(config: Mapping[str, Any]) -> list[Error]:
             )
         )
 
-    if verification_is_required(config) and email_field:
+    if email_field:
         try:
-            user_model._meta.get_field(email_field)
+            field = user_model._meta.get_field(email_field)
         except FieldDoesNotExist:
             issues.append(
                 Error(
@@ -299,6 +321,19 @@ def _validate_user_model_contract(config: Mapping[str, Any]) -> list[Error]:
                     id="fk_auth.E016",
                 )
             )
+        else:
+            if require_unique_email and not getattr(field, "unique", False):
+                issues.append(
+                    Error(
+                        "The configured email field must have unique=True when "
+                        "USER.REQUIRE_UNIQUE_EMAIL is enabled.",
+                        hint=(
+                            "Normalize stored email addresses and add a database uniqueness "
+                            "constraint."
+                        ),
+                        id="fk_auth.E037",
+                    )
+                )
 
     return issues
 
@@ -439,7 +474,146 @@ def _validate_verification_contract(config: Mapping[str, Any]) -> list[Error]:
     return issues
 
 
-def configuration_issues() -> list[Error | Warning]:
+def _validate_email_delivery_contract(config: Mapping[str, Any]) -> list[Error]:
+    """Validate retryable email-delivery and host-dispatcher configuration."""
+
+    email = config["EMAIL"]
+    if not isinstance(email, Mapping):
+        return [Error("FREEHAND_KIT_AUTH['EMAIL'] must be a dictionary.", id="fk_auth.E038")]
+
+    issues: list[Error] = []
+    dispatcher = email.get("DELIVERY_DISPATCHER")
+    if dispatcher is not None:
+        if not isinstance(dispatcher, str) or not dispatcher:
+            issues.append(
+                Error(
+                    "EMAIL.DELIVERY_DISPATCHER must be a dotted callable path or null.",
+                    id="fk_auth.E039",
+                )
+            )
+        else:
+            try:
+                if not callable(import_string(dispatcher)):
+                    raise TypeError
+            except (ImportError, AttributeError, TypeError):
+                issues.append(
+                    Error(
+                        "EMAIL.DELIVERY_DISPATCHER must resolve to a callable.",
+                        id="fk_auth.E040",
+                    )
+                )
+
+    for key, error_id in {
+        "OUTBOX_MAX_ATTEMPTS": "fk_auth.E041",
+        "OUTBOX_RETRY_BASE_SECONDS": "fk_auth.E042",
+        "OUTBOX_STALE_SENDING_SECONDS": "fk_auth.E043",
+        "OUTBOX_RETENTION_DAYS": "fk_auth.E044",
+    }.items():
+        value = email.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            issues.append(Error(f"EMAIL.{key} must be a positive integer.", id=error_id))
+    return issues
+
+
+def _validate_throttle_contract(config: Mapping[str, Any]) -> list[Error]:
+    """Require a shared cache for public-authentication throttles in production."""
+
+    throttle = config["THROTTLE"]
+    if not isinstance(throttle, Mapping):
+        return [Error("FREEHAND_KIT_AUTH['THROTTLE'] must be a dictionary.", id="fk_auth.E045")]
+
+    alias = throttle.get("CACHE_ALIAS")
+    if not isinstance(alias, str) or not alias:
+        return [Error("THROTTLE.CACHE_ALIAS must name a Django cache.", id="fk_auth.E046")]
+    try:
+        cache = caches[alias]
+    except Exception:
+        return [Error("THROTTLE.CACHE_ALIAS does not exist in CACHES.", id="fk_auth.E047")]
+
+    require_shared = throttle.get("REQUIRE_SHARED_CACHE")
+    if not isinstance(require_shared, bool):
+        return [Error("THROTTLE.REQUIRE_SHARED_CACHE must be a boolean.", id="fk_auth.E048")]
+    cache_module = type(cache).__module__
+    if require_shared and (
+        cache_module.startswith("django.core.cache.backends.locmem")
+        or cache_module.startswith("django.core.cache.backends.dummy")
+    ):
+        return [
+            Error(
+                "Public authentication throttles require a shared cache backend.",
+                hint=(
+                    "Configure Redis, Memcached, or another shared Django cache; local-memory "
+                    "cache is unsafe across workers."
+                ),
+                id="fk_auth.E049",
+            )
+        ]
+    return []
+
+
+def _validate_role_contract(config: Mapping[str, Any]) -> list[Error]:
+    """Validate constrained, server-owned Django Group role assignment."""
+
+    roles = config["ROLES"]
+    if not isinstance(roles, Mapping):
+        return [Error("FREEHAND_KIT_AUTH['ROLES'] must be a dictionary.", id="fk_auth.E050")]
+    if not isinstance(roles.get("ENABLED"), bool):
+        return [Error("ROLES.ENABLED must be a boolean.", id="fk_auth.E051")]
+    if not roles["ENABLED"]:
+        return []
+
+    definitions = roles.get("DEFINITIONS")
+    default_role = roles.get("DEFAULT_SIGNUP_ROLE")
+    if not isinstance(definitions, Mapping):
+        return [Error("ROLES.DEFINITIONS must be a dictionary.", id="fk_auth.E052")]
+    if not isinstance(default_role, str) or default_role not in definitions:
+        return [
+            Error(
+                "ROLES.DEFAULT_SIGNUP_ROLE must name a role in ROLES.DEFINITIONS.",
+                id="fk_auth.E053",
+            )
+        ]
+
+    issues: list[Error] = []
+    for role_name, definition in definitions.items():
+        groups = definition.get("GROUPS") if isinstance(definition, Mapping) else None
+        if (
+            not isinstance(role_name, str)
+            or not role_name
+            or not isinstance(groups, (list, tuple))
+            or not groups
+            or not all(isinstance(group, str) and group for group in groups)
+        ):
+            issues.append(
+                Error(
+                    "Each role definition must be a non-empty mapping with a non-empty GROUPS "
+                    "list.",
+                    id="fk_auth.E054",
+                )
+            )
+
+    if apps.ready:
+        try:
+            groups_field = get_user_model()._meta.get_field("groups")
+        except FieldDoesNotExist:
+            issues.append(
+                Error(
+                    "Roles require AUTH_USER_MODEL to expose a Django Group relation.",
+                    id="fk_auth.E055",
+                )
+            )
+        else:
+            if not getattr(groups_field, "many_to_many", False):
+                issues.append(
+                    Error(
+                        "AUTH_USER_MODEL.groups must be a many-to-many relation.",
+                        id="fk_auth.E056",
+                    )
+                )
+    return issues
+
+
+def configuration_issues() -> list[Error]:
     """Return Django system-check messages for unsafe or unsupported settings."""
 
     supplied = getattr(django_settings, SETTING_NAME, {})
@@ -452,11 +626,10 @@ def configuration_issues() -> list[Error | Warning]:
         ]
 
     config = get_settings()
-    issues: list[Error | Warning] = []
+    issues: list[Error] = []
     user = config["USER"]
     login = config["LOGIN"]
     jwt = config["JWT"]
-    roles = config["ROLES"]
 
     if not isinstance(user, Mapping):
         issues.append(Error("FREEHAND_KIT_AUTH['USER'] must be a dictionary.", id="fk_auth.E008"))
@@ -548,13 +721,17 @@ def configuration_issues() -> list[Error | Warning]:
 
     issues.extend(_validate_user_model_contract(config))
     issues.extend(_validate_verification_contract(config))
-    if isinstance(roles, Mapping) and roles.get("ENABLED"):
+    issues.extend(_validate_email_delivery_contract(config))
+    issues.extend(_validate_throttle_contract(config))
+    issues.extend(_validate_role_contract(config))
+    retention_days = config.get("CREDENTIAL_RETENTION_DAYS")
+    if (
+        not isinstance(retention_days, int)
+        or isinstance(retention_days, bool)
+        or retention_days <= 0
+    ):
         issues.append(
-            Warning(
-                "Basic role assignment is declared in the configuration contract but is not "
-                "implemented in the pre-alpha scaffold.",
-                id="fk_auth.W002",
-            )
+            Error("CREDENTIAL_RETENTION_DAYS must be a positive integer.", id="fk_auth.E057")
         )
 
     return issues

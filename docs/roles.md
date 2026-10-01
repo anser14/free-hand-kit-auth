@@ -1,13 +1,24 @@
 # Roles
 
-Roles are optional and intentionally narrow in this package. When enabled, they will
-map configured role names to Django's built-in `Group` records and optionally assign
-one default group on signup. They do not implement resource policies, tenant-scoped
-roles, or generic RBAC.
+Roles are optional and intentionally narrow. A role is a server-owned name mapped to
+one or more Django Groups, and signup can receive exactly one configured default role.
+The client cannot request a role in the signup payload.
 
-Those capabilities belong to the future Freehand Kit Access package. Auth will expose
-only the authenticated user's group membership needed for basic setup and token claims.
+```python
+FREEHAND_KIT_AUTH["ROLES"] = {
+    "ENABLED": True,
+    "DEFAULT_SIGNUP_ROLE": "member",
+    "DEFINITIONS": {
+        "member": {"GROUPS": ("members",)},
+        "staff": {"GROUPS": ("members", "staff")},
+    },
+}
+```
 
-Before implementation, the role contract must decide whether groups are created by a
-management command, an explicit bootstrap service, or host-owned data migrations.
-Automatic database writes during Django startup are not acceptable.
+The package creates the configured Django Group records on signup if needed and adds
+the new user to the default role's groups. The system check requires a `groups`
+many-to-many relation on the host user model.
+
+This is not a policy engine: resource permissions, tenant-scoped roles, role changes,
+and administrator privileges stay host-owned. Never map an unauthenticated registration
+flow to `is_staff`, `is_superuser`, or a privileged group.

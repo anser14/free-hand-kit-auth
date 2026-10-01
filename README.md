@@ -4,8 +4,9 @@
 workflows for Django applications. The import package and `INSTALLED_APPS` entry is
 `fk_auth`.
 
-> **Status: pre-alpha.** The core local-account API is implemented and integration
-> tested, but the package has not yet completed its production release gate.
+> **Status: stable 1.x.** The supported baseline is Python 3.11+, Django 5.2–6.0,
+> and Django REST Framework 3.17.2–3.17.x. Production deployment still requires the
+> host to configure shared throttling storage, SMTP, secrets, and HTTPS.
 
 ## Intended scope
 
@@ -31,6 +32,9 @@ python -m pip install freehand-kit-auth
 
 # For Redis-backed OTP verification:
 python -m pip install "freehand-kit-auth[redis]"
+
+# For RSA JWT signing and verification:
+python -m pip install "freehand-kit-auth[crypto]"
 ```
 
 ```python
@@ -51,13 +55,16 @@ variables before constructing its Django settings.
 ## Development
 
 ```bash
-cd fk_auth
+cd freehand-kit-auth
 python -m pip install -e ".[dev]"
 pytest
 ruff check .
 python -m build
 twine check dist/*
 ```
+
+The GitHub Actions workflow runs the supported Python/Django matrix, linting, typing,
+package validation, dependency auditing, and a PostgreSQL/Redis/Mailpit integration test.
 
 ## Project status
 

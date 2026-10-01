@@ -1,24 +1,21 @@
 # Release process
 
-This package is pre-alpha. Publish only immutable, fully validated artifacts; never
-reuse a version already uploaded to PyPI.
+Publish only immutable artifacts. A version uploaded to PyPI or TestPyPI must never be
+reused.
 
-## Pre-release checklist
+## Release gate
 
-1. Set a new PEP 440 version and add a dated changelog entry.
-2. Confirm the Documentation, Source, Issues, and Security metadata URLs are live
-   and maintained; do not publish placeholder links.
-3. Run every command in [Testing](testing.md), including a clean wheel install in
-   the consumer project.
-4. Test link/token, real Redis OTP, and disposable-SMTP delivery. Verify OpenAPI for
-   every enabled verification mode.
-5. Run `python manage.py check --tag fk_auth` with a 32-byte-or-longer HMAC key or
-   the selected RSA key pair. Do not reuse Django's `SECRET_KEY`.
-6. Publish to TestPyPI, install that exact build in a clean environment, then publish
-   the same versioned artifacts to PyPI.
+1. Confirm all required GitHub Actions checks are green for the supported matrix.
+2. Review Dependabot updates and the dependency-audit result.
+3. Run the full local checks in [Testing](testing.md), including real PostgreSQL,
+   Redis, and Mailpit coverage.
+4. Run `python manage.py check --deploy` and `python manage.py check --tag fk_auth`
+   with production-equivalent secrets and shared cache configuration.
+5. Confirm the security-reporting channel in `SECURITY.md` is enabled and monitored.
+6. Update the version, compatibility policy, and dated changelog entry.
+7. Build once, upload the identical artifacts to TestPyPI, install them in a clean
+   consumer project, and only then upload the same version to PyPI.
 
-## Stable-release gate
-
-Keep the pre-alpha classifier until there is a public source repository, issue and
-vulnerability-reporting channels, CI across the declared support matrix, and
-real-service integration coverage for SMTP and Redis.
+The repository never publishes automatically from CI. Publishing requires an explicit
+maintainer action and PyPI trusted-publishing configuration or another protected
+credential flow.

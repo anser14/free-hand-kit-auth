@@ -5,11 +5,14 @@ from __future__ import annotations
 from typing import Any
 
 from django.contrib.auth import get_user_model, password_validation
+from django.db import IntegrityError, transaction
+from django.db.models import Q
 from rest_framework import serializers
 
 from fk_auth.conf import (
     get_otp_settings,
     get_registration_fields,
+    get_settings,
     get_user_field_names,
     get_user_model_email_field,
     get_verification_method,
@@ -119,12 +122,45 @@ def signup_serializer_class() -> type[serializers.ModelSerializer[Any]]:
             password = attrs.get("password")
             if password != attrs.pop("password_confirm", None):
                 raise serializers.ValidationError({"password_confirm": "Passwords do not match."})
+            if email_field and email_field in attrs:
+                # Login and recovery lookups are case-insensitive.  Store one canonical
+                # representation so the database uniqueness constraint enforces that rule.
+                attrs[email_field] = str(attrs[email_field]).strip().casefold()
+
+            lookup_fields: list[str] = []
+            identifiers = get_settings()["LOGIN"]["IDENTIFIERS"]
+            if "email" in identifiers and email_field:
+                lookup_fields.append(email_field)
+            if "username" in identifiers and user_model.USERNAME_FIELD not in lookup_fields:
+                lookup_fields.append(user_model.USERNAME_FIELD)
+            identity_values = [
+                str(attrs[field]).strip() for field in lookup_fields if field in attrs
+            ]
+            if identity_values:
+                query = Q()
+                for value in identity_values:
+                    for field_name in lookup_fields:
+                        query |= Q(**{f"{field_name}__iexact": value})
+                if user_model._default_manager.filter(query).exists():
+                    raise serializers.ValidationError(
+                        "An account with one of these login identifiers already exists."
+                    )
             password_validation.validate_password(password)
             return attrs
 
         def create(self, validated_data: dict[str, Any]) -> Any:
             password = validated_data.pop("password")
-            return user_model._default_manager.create_user(password=password, **validated_data)
+            # The pre-flight lookup gives a helpful error in normal use, but the
+            # database is the only authority during concurrent registrations.
+            try:
+                with transaction.atomic():
+                    return user_model._default_manager.create_user(
+                        password=password, **validated_data
+                    )
+            except IntegrityError as exc:
+                raise serializers.ValidationError(
+                    "An account with one of these login identifiers already exists."
+                ) from exc
 
     return SignupSerializer
 

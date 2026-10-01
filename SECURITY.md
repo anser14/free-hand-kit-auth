@@ -2,20 +2,22 @@
 
 ## Supported versions
 
-Until a stable release is published, no version is supported for production use.
-The first stable release will list its supported versions and end-of-life dates here.
+The maintained stable line is `1.x`. Security fixes are released in the latest `1.x`
+version. Pre-release or unsupported versions should be upgraded before reporting a
+problem.
 
 ## Reporting a vulnerability
 
-Do not open a public issue for a suspected security vulnerability. Until a private
-security contact is configured, report it privately to the repository maintainers
-through the hosting platform's private security-advisory feature.
+Do not open a public issue. Use the repository's private vulnerability-reporting flow:
 
-Before publishing this package, maintainers must replace this section with a
-monitored security contact and a disclosure response target.
+https://github.com/anser14/free-hand-kit-auth/security/advisories/new
+
+Maintainers must keep GitHub private vulnerability reporting enabled and acknowledge
+reports within five business days. Reports should include the affected version,
+reproduction steps, impact, and any proof-of-concept needed to validate the issue.
 
 ## Security boundary
 
-Freehand Kit Auth will validate its own configuration and authentication flows. Host
-applications remain responsible for their deployment, secrets, mail provider,
-database, trusted proxy configuration, and authorization policy.
+Freehand Kit Auth validates its own configuration and authentication flows. Host
+applications remain responsible for TLS, reverse-proxy trust, CORS, secure secret
+storage, database access, SMTP/provider security, and authorization policy.

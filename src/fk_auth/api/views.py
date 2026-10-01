@@ -5,8 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from django.contrib.auth.tokens import default_token_generator
-from django.utils.encoding import force_bytes, force_str
-from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from django.db import transaction
+from django.utils.encoding import force_str
+from django.utils.http import urlsafe_base64_decode
 from drf_spectacular.openapi import AutoSchema
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from rest_framework import permissions, status
@@ -37,17 +38,19 @@ from fk_auth.services.credentials import (
     InvalidOneTimeCredential,
     consume_credential,
     has_verified_email,
-    issue_credential,
     mark_email_verified,
 )
-from fk_auth.services.emails import send_email_verification, send_password_reset
 from fk_auth.services.otp import (
     InvalidOTP,
-    OTPResendSuppressed,
     OTPStoreUnavailable,
     consume_otp,
-    issue_otp,
 )
+from fk_auth.services.outbox import (
+    enqueue_email_verification,
+    enqueue_password_reset,
+    schedule_delivery,
+)
+from fk_auth.services.roles import assign_default_role
 from fk_auth.services.users import (
     InvalidCredentials,
     UnverifiedEmail,
@@ -55,7 +58,9 @@ from fk_auth.services.users import (
     get_user_email,
 )
 from fk_auth.throttles import (
+    EmailAddressThrottle,
     EmailThrottle,
+    LoginIdentifierThrottle,
     LoginThrottle,
     PasswordResetThrottle,
     SignupThrottle,
@@ -95,33 +100,17 @@ class VerificationStoreUnavailable(APIException):
     default_code = "verification_unavailable"
 
 
-def _verification_lifetime() -> int:
-    return int(get_settings()["EMAIL"]["VERIFICATION_TOKEN_LIFETIME_SECONDS"])
-
-
 PROFILE_SCHEMA_SERIALIZER = profile_serializer_class()
 
 
-def _send_verification_for_user(user: object, *, is_resend: bool) -> bool:
+def _queue_verification_for_user(user: object, *, is_resend: bool) -> bool:
+    """Create a secret-free durable delivery record and schedule its dispatch."""
+
     email = get_user_email(user)
     if not email:
         return False
-    method = get_verification_method()
-    try:
-        if method == "otp":
-            credential = issue_otp(user=user, email=email, is_resend=is_resend)
-        else:
-            credential = issue_credential(
-                user=user,
-                purpose="email_verification",
-                email=email,
-                lifetime_seconds=_verification_lifetime(),
-            )
-    except OTPResendSuppressed:
-        return False
-    except OTPStoreUnavailable as exc:
-        raise VerificationStoreUnavailable from exc
-    send_email_verification(user=user, email=email, credential=credential, method=method)
+    delivery = enqueue_email_verification(user=user, email=email, is_resend=is_resend)
+    schedule_delivery(delivery.pk)
     return True
 
 
@@ -136,7 +125,7 @@ def _send_verification_for_user(user: object, *, is_resend: bool) -> bool:
 class SignupView(PublicAuthAPIView):
     """Create a host-model user from only explicitly configured safe fields."""
 
-    throttle_classes = [SignupThrottle]
+    throttle_classes = [SignupThrottle, EmailAddressThrottle]
 
     def post(self, request):  # type: ignore[no-untyped-def]
         if not get_settings()["REGISTRATION"]["ENABLED"]:
@@ -144,9 +133,17 @@ class SignupView(PublicAuthAPIView):
 
         serializer = signup_serializer_class()(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.save()
-        if verification_is_required():
-            _send_verification_for_user(user, is_resend=False)
+        with transaction.atomic():
+            user = serializer.save()
+            assign_default_role(user)
+            email = get_user_email(user)
+            delivery = (
+                enqueue_email_verification(user=user, email=email, is_resend=False)
+                if verification_is_required() and email
+                else None
+            )
+        if delivery is not None:
+            schedule_delivery(delivery.pk)
         return Response({"detail": "Account created."}, status=status.HTTP_201_CREATED)
 
 
@@ -219,7 +216,7 @@ class EmailVerifyView(PublicAuthAPIView):
 class EmailResendView(PublicAuthAPIView):
     """Resend a verification credential without revealing account existence."""
 
-    throttle_classes = [EmailThrottle]
+    throttle_classes = [EmailThrottle, EmailAddressThrottle]
 
     def post(self, request):  # type: ignore[no-untyped-def]
         serializer = EmailSerializer(data=request.data)
@@ -236,7 +233,7 @@ class EmailResendView(PublicAuthAPIView):
             if len(candidates) == 1 and not has_verified_email(
                 user=candidates[0], email=serializer.validated_data["email"]
             ):
-                _send_verification_for_user(candidates[0], is_resend=True)
+                _queue_verification_for_user(candidates[0], is_resend=True)
         return Response(
             {"detail": "If the account is eligible, a verification email will be sent."},
             status=status.HTTP_202_ACCEPTED,
@@ -254,7 +251,7 @@ class EmailResendView(PublicAuthAPIView):
 class LoginView(PublicAuthAPIView):
     """Authenticate an email or username identity and issue a JWT token pair."""
 
-    throttle_classes = [LoginThrottle]
+    throttle_classes = [LoginThrottle, LoginIdentifierThrottle]
 
     def post(self, request):  # type: ignore[no-untyped-def]
         serializer = LoginSerializer(data=request.data)
@@ -346,7 +343,7 @@ class LogoutView(PublicAuthAPIView):
 class PasswordResetRequestView(PublicAuthAPIView):
     """Send Django's single-use password-reset token without account enumeration."""
 
-    throttle_classes = [PasswordResetThrottle]
+    throttle_classes = [PasswordResetThrottle, EmailAddressThrottle]
 
     def post(self, request):  # type: ignore[no-untyped-def]
         serializer = EmailSerializer(data=request.data)
@@ -361,13 +358,10 @@ class PasswordResetRequestView(PublicAuthAPIView):
                 )[:2]
             )
             if len(users) == 1 and getattr(users[0], "is_active", True):
-                user = users[0]
-                send_password_reset(
-                    user=user,
-                    email=serializer.validated_data["email"],
-                    uid=urlsafe_base64_encode(force_bytes(user.pk)),
-                    token=default_token_generator.make_token(user),
+                delivery = enqueue_password_reset(
+                    user=users[0], email=serializer.validated_data["email"]
                 )
+                schedule_delivery(delivery.pk)
         return Response(
             {"detail": "If the account exists, a password-reset email will be sent."},
             status=status.HTTP_202_ACCEPTED,

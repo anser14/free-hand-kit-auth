@@ -1,8 +1,8 @@
 # JWT design
 
-Freehand Kit Auth will use DRF SimpleJWT as its sole token engine. “Custom JWT” means
-custom claims and configuration layered on that proven implementation; it will never
-mean a separate home-grown signing or token-validation implementation.
+Freehand Kit Auth uses DRF SimpleJWT as its sole token engine. “Custom JWT” means
+custom claims and configuration layered on that proven implementation; it never means
+a separate home-grown signing or token-validation implementation.
 
 ## Supported modes
 
@@ -12,14 +12,15 @@ mean a separate home-grown signing or token-validation implementation.
 | Asymmetric | `RS256`, `RS384`, `RS512` | RSA private signing key and public verifying key | Services may verify tokens using only the public key. |
 
 The JWT secret must be separate from Django `SECRET_KEY`. RSA support requires the
-`rsa` package extra. Key rotation, issuer, audience, claims, and token lifetimes will
-be documented and tested before the first stable release.
+`crypto` package extra. Configure issuer and audience validation in a host authentication
+layer when tokens cross service boundaries; this package intentionally issues and
+verifies the configured local-service tokens only.
 
 ## Refresh and logout
 
-The initial default contract is a short-lived access token plus a rotating refresh
-token. Refresh rotation and blacklist-based revocation are enabled by default. This
-requires SimpleJWT's `token_blacklist` Django app and migrations. Logout will revoke
+The default contract is a short-lived access token plus a rotating refresh token.
+Refresh rotation and blacklist-based revocation are enabled by default. This requires
+SimpleJWT's `token_blacklist` Django app and migrations. Logout revokes
 the submitted refresh token; an already issued access token remains valid until its
 short lifetime expires.
 

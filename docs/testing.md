@@ -1,30 +1,41 @@
 # Testing
 
-The package suite uses a custom `AUTH_USER_MODEL`, Django REST Framework's test
-client, a local-memory mail backend, and `fakeredis` for OTP behavior. This keeps
-tests repeatable without exposing credentials or requiring network services.
+The fast suite uses a host-defined custom user model, local-memory email, and
+`fakeredis`. It covers all verification modes, signup/login/logout, password flows,
+outbox retries, roles, OpenAPI, custom fields, token revocation, and safety failures.
 
 ## Local checks
 
-Run these commands from `fk_auth` after installing the development extra:
+Run from `fk_auth`:
 
 ```bash
 python -m pip install -e ".[dev]"
-pytest
-ruff format --check src tests
-ruff check src tests
-mypy src
+python -m ruff format --check src tests
+python -m ruff check src tests
+python -m mypy src
+python -m coverage run -m pytest -m "not real_services"
+python -m coverage report
 python -m build
-twine check dist/*
+python -m twine check dist/*
+python -m pip_audit --local --skip-editable
 ```
 
-## Required behavioral coverage
+The coverage gate is enforced in CI. The suite deliberately excludes the opt-in
+real-services test from ordinary local execution.
 
-Authentication changes need relevant success and safe-failure tests. The maintained
-suite covers token, link, Redis-backed OTP, and disabled verification modes; signup,
-resend, verification, login, refresh, logout, profile, password, and OpenAPI flows;
-and a host-defined custom user model.
+## PostgreSQL, Redis, and SMTP test
 
-`fakeredis` proves the Redis command contract. Before a stable release, repeat OTP
-coverage against supported real Redis versions and test email delivery through a
-disposable SMTP inbox such as Mailpit.
+Run the disposable service stack and then the end-to-end test:
+
+```bash
+docker compose -f compose.integration.yml up --detach --wait
+export FK_AUTH_TEST_POSTGRES=1
+export FK_AUTH_TEST_REDIS_URL=redis://127.0.0.1:6379/15
+export FK_AUTH_TEST_SMTP=1
+pytest -m real_services tests/integration/test_real_services.py
+docker compose -f compose.integration.yml down --volumes
+```
+
+On PowerShell, set those environment variables with `$env:NAME = "value"` instead of
+`export`. GitHub Actions runs this test automatically with PostgreSQL, Redis, and
+Mailpit.

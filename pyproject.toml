@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "freehand-kit-auth"
-version = "0.1.0a0"
+version = "1.0.0"
 description = "Configurable Django REST Framework authentication endpoints built on Simple JWT."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -15,16 +15,14 @@ authors = [
 ]
 keywords = ["django", "django-rest-framework", "authentication", "jwt", "drf", "openapi"]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 5 - Production/Stable",
   "Framework :: Django",
-  "Framework :: Django :: 4.2",
   "Framework :: Django :: 5.2",
   "Framework :: Django :: 6.0",
   "Intended Audience :: Developers",
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -32,14 +30,16 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
-  "Django>=4.2,<6.1",
-  "djangorestframework>=3.14,<3.17",
-  "djangorestframework-simplejwt>=5.5,<6",
-  "drf-spectacular>=0.28,<1",
+  "Django>=5.2,<6.1",
+  "djangorestframework>=3.17.2,<3.18",
+  "djangorestframework-simplejwt>=5.5.1,<6",
+  "drf-spectacular>=0.29,<1",
 ]
 
 [project.optional-dependencies]
-rsa = ["djangorestframework-simplejwt[crypto]>=5.5,<6"]
+crypto = ["djangorestframework-simplejwt[crypto]>=5.5.1,<6"]
+# Compatibility alias for configurations that previously used the narrower name.
+rsa = ["djangorestframework-simplejwt[crypto]>=5.5.1,<6"]
 redis = ["redis>=5,<7"]
 dev = [
   "build>=1.2",
@@ -47,8 +47,11 @@ dev = [
   "mypy>=1.13",
   "django-stubs[compatible-mypy]>=5.1",
   "djangorestframework-stubs>=3.15",
+  "djangorestframework-simplejwt[crypto]>=5.5.1,<6",
   "pytest>=8.3",
   "pytest-django>=4.9",
+  "pip-audit>=2.8",
+  "psycopg[binary]>=3.2",
   "redis>=5,<7",
   "fakeredis>=2.26,<3",
   "ruff>=0.8",
@@ -77,6 +80,7 @@ include = [
   "/SECURITY.md",
   "/CONTRIBUTING.md",
   "/CODE_OF_CONDUCT.md",
+  "/compose.integration.yml",
   "/pyproject.toml",
 ]
 
@@ -85,6 +89,9 @@ DJANGO_SETTINGS_MODULE = "tests.settings"
 pythonpath = [".", "src"]
 testpaths = ["tests"]
 addopts = "--strict-markers --import-mode=importlib"
+markers = [
+  "real_services: requires PostgreSQL, Redis, and Mailpit configured by the integration environment.",
+]
 
 [tool.coverage.run]
 branch = true
@@ -93,9 +100,10 @@ source = ["fk_auth"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+fail_under = 80
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 100
 extend-exclude = ["migrations"]
 
@@ -103,7 +111,7 @@ extend-exclude = ["migrations"]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 check_untyped_defs = true
 disallow_any_generics = true
 disallow_untyped_defs = true

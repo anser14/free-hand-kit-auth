@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from datetime import timedelta
-from typing import Any, cast
+from typing import Any
 
 from django.db import transaction
 from django.utils import timezone
@@ -57,8 +57,12 @@ def consume_credential(*, token: str, purpose: str) -> OneTimeCredential:
         if credential is None or credential.consumed_at is not None or credential.expires_at <= now:
             raise InvalidOneTimeCredential
         credential.consumed_at = now
-        credential.save(update_fields=["consumed_at"])
-    return cast(OneTimeCredential, credential)
+        if purpose == OneTimeCredential.Purpose.EMAIL_VERIFICATION:
+            credential.verified_at = now
+            credential.save(update_fields=["consumed_at", "verified_at"])
+        else:
+            credential.save(update_fields=["consumed_at"])
+    return credential
 
 
 def mark_email_verified(*, user: Any, email: str) -> OneTimeCredential:
@@ -76,16 +80,14 @@ def mark_email_verified(*, user: Any, email: str) -> OneTimeCredential:
             email__iexact=email,
             consumed_at__isnull=True,
         ).update(consumed_at=now)
-        return cast(
-            OneTimeCredential,
-            OneTimeCredential.objects.create(
-                user=user,
-                purpose=OneTimeCredential.Purpose.EMAIL_VERIFICATION,
-                email=email,
-                token_hash=_hash_token(secrets.token_urlsafe(32)),
-                expires_at=now,
-                consumed_at=now,
-            ),
+        return OneTimeCredential.objects.create(
+            user=user,
+            purpose=OneTimeCredential.Purpose.EMAIL_VERIFICATION,
+            email=email,
+            token_hash=_hash_token(secrets.token_urlsafe(32)),
+            expires_at=now,
+            consumed_at=now,
+            verified_at=now,
         )
 
 
@@ -97,6 +99,17 @@ def has_verified_email(*, user: Any, email: str) -> bool:
             user=user,
             purpose=OneTimeCredential.Purpose.EMAIL_VERIFICATION,
             email__iexact=email,
-            consumed_at__isnull=False,
+            verified_at__isnull=False,
         ).exists()
     )
+
+
+def purge_expired_unverified_credentials(*, retention_days: int) -> int:
+    """Delete only stale, unverified credentials while retaining verification evidence."""
+
+    cutoff = timezone.now() - timedelta(days=retention_days)
+    deleted, _ = OneTimeCredential.objects.filter(
+        verified_at__isnull=True,
+        expires_at__lt=cutoff,
+    ).delete()
+    return int(deleted)

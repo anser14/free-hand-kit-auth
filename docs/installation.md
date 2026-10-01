@@ -6,12 +6,15 @@
 python -m pip install freehand-kit-auth
 ```
 
-RSA signing and Redis-backed OTP are opt-in extras:
+Asymmetric JWT signing and Redis-backed OTP are opt-in extras:
 
 ```bash
-python -m pip install "freehand-kit-auth[rsa]"
+python -m pip install "freehand-kit-auth[crypto]"
 python -m pip install "freehand-kit-auth[redis]"
 ```
+
+`rsa` remains an alias for the `crypto` extra for compatibility with early
+configurations.
 
 The host must install the package using its normal Python dependency manager. The
 published wheel and source distribution must work with pip, uv, Poetry, and PDM; no

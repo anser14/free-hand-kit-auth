@@ -1,6 +1,6 @@
 # ADR-0001: Auth v1 is local-account and JWT focused
 
-**Status:** Accepted for foundation work  
+**Status:** Implemented
 **Date:** 2026-10-01
 
 ## Context
@@ -11,20 +11,19 @@ local-account solution with email/username login and JWT support.
 
 ## Decision
 
-`fk_auth` will initially target registration, email verification, email/username
+`fk_auth` targets registration, email verification, email/username
 login, logout, password reset/change, current-user profile, DRF SimpleJWT, automatic
 OpenAPI documentation, and configuration validation. OAuth, social login, OIDC,
 SAML, passkeys, tenancy, payment, storage, and full RBAC are out of scope.
 
 JWT uses SimpleJWT and its supported algorithms. Custom behavior is limited to
-configuration and claims; this project will not implement independent JWT crypto.
+configuration and claims; this project does not implement independent JWT crypto.
 
 The package resolves the host's configured `AUTH_USER_MODEL` and supports its custom
 fields through explicit registration, read, write, and token-claim allowlists. It
-will not expose every discovered model field automatically.
+does not expose every discovered model field automatically.
 
 ## Consequences
 
-The package has a smaller dependency tree and a clearer security boundary. The
-roadmap must be revised before any public 1.0 scope claim is made. OTP and basic role
-assignment remain feature-gated pending explicit workflow and API decisions.
+The package has a smaller dependency tree and a clearer security boundary. OTP and
+basic role assignment are configuration-gated so hosts opt in explicitly.

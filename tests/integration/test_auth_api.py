@@ -10,9 +10,12 @@ from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.cache import cache
 from django.urls import clear_url_caches
+from django.utils import timezone
 from rest_framework.test import APIClient
 
+from fk_auth.models import EmailDelivery
 from fk_auth.services import otp as otp_service
+from fk_auth.services import outbox as outbox_service
 
 pytestmark = pytest.mark.django_db
 
@@ -505,3 +508,128 @@ def test_password_change_revokes_existing_refresh_tokens(auth_config) -> None:
         format="json",
     )
     assert new_login.status_code == 200
+
+
+def test_resending_a_link_does_not_mark_an_email_as_verified(auth_config) -> None:
+    client = APIClient()
+    signup = client.post(
+        "/signup/",
+        {
+            "username": "resend-user",
+            "email": "resend-user@example.com",
+            "first_name": "Resend",
+            "department": "Engineering",
+            "password": "correct-horse-battery-staple",
+            "password_confirm": "correct-horse-battery-staple",
+        },
+        format="json",
+    )
+    assert signup.status_code == 201
+    assert (
+        client.post(
+            "/email/resend/", {"email": "resend-user@example.com"}, format="json"
+        ).status_code
+        == 202
+    )
+    assert (
+        client.post(
+            "/login/",
+            {"identifier": "resend-user", "password": "correct-horse-battery-staple"},
+            format="json",
+        ).status_code
+        == 401
+    )
+    assert (
+        client.post("/email/verify/", {"token": _verification_token()}, format="json").status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/login/",
+            {"identifier": "resend-user", "password": "correct-horse-battery-staple"},
+            format="json",
+        ).status_code
+        == 200
+    )
+
+
+def test_failed_delivery_is_durable_and_retryable(auth_config, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    original_sender = outbox_service.send_email_verification
+
+    def unavailable(**kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("SMTP unavailable")
+
+    monkeypatch.setattr(outbox_service, "send_email_verification", unavailable)
+    client = APIClient()
+    signup = client.post(
+        "/signup/",
+        {
+            "username": "delivery-user",
+            "email": "delivery-user@example.com",
+            "first_name": "Delivery",
+            "department": "Engineering",
+            "password": "correct-horse-battery-staple",
+            "password_confirm": "correct-horse-battery-staple",
+        },
+        format="json",
+    )
+    assert signup.status_code == 201
+    delivery = EmailDelivery.objects.get(recipient="delivery-user@example.com")
+    assert delivery.status == EmailDelivery.Status.FAILED
+    assert delivery.attempts == 1
+
+    monkeypatch.setattr(outbox_service, "send_email_verification", original_sender)
+    delivery.available_at = timezone.now()
+    delivery.save(update_fields=["available_at"])
+    assert outbox_service.dispatch_delivery(delivery.pk)
+    delivery.refresh_from_db()
+    assert delivery.status == EmailDelivery.Status.SENT
+    assert len(mail.outbox) == 1
+
+
+def test_default_role_is_server_assigned(auth_config) -> None:
+    from django.conf import settings
+
+    settings.FREEHAND_KIT_AUTH["ROLES"] = {
+        "ENABLED": True,
+        "DEFAULT_SIGNUP_ROLE": "member",
+        "DEFINITIONS": {"member": {"GROUPS": ("fk-auth-member",)}},
+    }
+    client = APIClient()
+    signup = client.post(
+        "/signup/",
+        {
+            "username": "role-user",
+            "email": "role-user@example.com",
+            "first_name": "Role",
+            "department": "Engineering",
+            "password": "correct-horse-battery-staple",
+            "password_confirm": "correct-horse-battery-staple",
+            "role": "admin",
+        },
+        format="json",
+    )
+    assert signup.status_code == 201
+    user = get_user_model().objects.get(username="role-user")
+    assert list(user.groups.values_list("name", flat=True)) == ["fk-auth-member"]
+
+
+def test_signup_rejects_cross_identifier_collisions(auth_config) -> None:
+    get_user_model().objects.create_user(
+        username="existing-user",
+        email="existing@example.com",
+        password="correct-horse-battery-staple",
+    )
+    response = APIClient().post(
+        "/signup/",
+        {
+            "username": "existing@example.com",
+            "email": "new@example.com",
+            "first_name": "Collision",
+            "department": "Engineering",
+            "password": "correct-horse-battery-staple",
+            "password_confirm": "correct-horse-battery-staple",
+        },
+        format="json",
+    )
+    assert response.status_code == 400

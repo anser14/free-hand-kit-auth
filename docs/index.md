@@ -16,9 +16,9 @@ user model, settings module, URL configuration, or deployment responsibilities.
 
 ## Current state
 
-The package currently provides the first local-account endpoint set. Its configuration
-namespace, Django checks, OpenAPI annotations, package migrations, and integration
-tests exist. It remains pre-alpha until the full production release gate is passed.
+The stable 1.x package provides the local-account endpoint set with configuration
+checks, OpenAPI annotations, package migrations, retryable email delivery, and
+automated matrix plus real-service integration coverage.
 
 ## Guides
 

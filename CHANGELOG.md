@@ -1,31 +1,29 @@
 # Changelog
 
-All notable changes to this package will be documented in this file.
+All notable changes to this package are documented here. The project follows
+[Semantic Versioning](https://semver.org/).
 
-The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
-this package follows semantic versioning once it reaches `1.0.0`.
-
-## [Unreleased]
+## [1.0.0] - 2026-10-01
 
 ### Added
 
-- Configurable email-verification modes: link, high-entropy token, Redis-backed
-  numeric or alphanumeric OTP, or no verification.
-- Redis-backed OTP expiry, HMAC-protected storage, one-time consumption, attempt
-  limits, resend cooldowns, hourly delivery limits, and mode-specific Swagger input.
-- Initial production-package scaffold.
-- Django application configuration and configuration validation foundation.
-- Documentation, example configuration, test layout, and CI workflow.
-- Local-account endpoints for signup, email verification/resend, email/username
-  login, JWT refresh/verify/logout, password reset/change, and `me` profile access.
-- Hashed, expiring, single-use email-verification credentials owned by this package.
-- Custom-user-model integration with explicit registration/profile/token-claim field
-  allowlists and integration coverage using a host-specific `department` field.
-- Dedicated HMAC or RSA SimpleJWT token configuration and refresh-token revocation
-  after password changes.
+- Configurable link, high-entropy token, Redis OTP, and no-verification signup modes.
+- Custom-user-model registration, safe profile fields, email/username login, JWT
+  refresh/verify/logout, password reset/change, OpenAPI, and server-owned Group roles.
+- Durable secret-free email delivery records with retry, async-dispatcher integration,
+  management commands, and retention cleanup.
+- Automated Python/Django compatibility matrix, dependency auditing, and real
+  PostgreSQL/Redis/Mailpit coverage.
 
-## [0.1.0a0] - 2026-10-01
+### Security
 
-### Added
+- Required a unique canonical email field for the production identity contract.
+- Added shared-cache IP and identifier throttles.
+- Separated verified-email evidence from merely consumed credentials, preventing a
+  superseded verification token from marking an account as verified.
+- Raised the minimum Django REST Framework version to 3.17.2.
 
-- Initial pre-alpha scaffold; no public authentication API exists.
+### Changed
+
+- Declared Python 3.11+, Django 5.2–6.0, and DRF 3.17.2–3.17.x as the supported line.
+- Marked the package `Production/Stable` and established the 1.x security policy.
