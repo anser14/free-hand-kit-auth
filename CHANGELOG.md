@@ -3,6 +3,16 @@
 All notable changes to this package are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] - 2026-10-02
+
+### Changed
+
+- Expanded the PyPI README with a complete custom-user quick start, settings,
+  URL mounting, Swagger location, verification choices, API examples, and a
+  production checklist.
+- Replaced the obsolete OTP example setting in the basic-project reference with
+  the current `VERIFICATION` configuration contract.
+
 ## [1.0.0] - 2026-10-01
 
 ### Added
